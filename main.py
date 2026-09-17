@@ -2,6 +2,7 @@ import torch
 import time
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from moe_offloader.patcher import attach_lru_offloader
+from safety_monitor import SafetyWatchdog
 
 def print_memory_profile(tag: str):
     """Utility to print current CUDA VRAM usage."""
@@ -10,6 +11,10 @@ def print_memory_profile(tag: str):
     print(f"[{tag}] VRAM Allocated: {allocated:.2f} GB | Reserved: {reserved:.2f} GB")
 
 def main():
+    # Start the safety watchdog to prevent OOM crashes
+    watchdog = SafetyWatchdog(vram_limit_gb=3.8, ram_percent_limit=90.0, check_interval=0.1)
+    watchdog.start()
+    
     model_id = "Qwen/Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4"
     print(f"Loading {model_id} into CPU RAM...")
 
@@ -88,6 +93,8 @@ def main():
         print("\nSUCCESS: VRAM footprint successfully constrained below 3.5 GB limit.")
     else:
         print("\nWARNING: VRAM footprint exceeded the 3.5 GB limit.")
+
+    watchdog.stop()
 
 if __name__ == "__main__":
     main()
