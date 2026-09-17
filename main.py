@@ -15,7 +15,7 @@ def main():
     watchdog = SafetyWatchdog(vram_limit_gb=3.8, ram_percent_limit=90.0, check_interval=0.1)
     watchdog.start()
     
-    model_id = "Qwen/Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4"
+    model_id = "Qwen/Qwen1.5-MoE-A2.7B-Chat"
     print(f"Loading {model_id} into CPU RAM...")
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
