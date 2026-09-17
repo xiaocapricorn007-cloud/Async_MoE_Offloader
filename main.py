@@ -1,0 +1,93 @@
+import torch
+import time
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from moe_offloader.patcher import attach_lru_offloader
+
+def print_memory_profile(tag: str):
+    """Utility to print current CUDA VRAM usage."""
+    allocated = torch.cuda.memory_allocated() / (1024 ** 3)
+    reserved = torch.cuda.memory_reserved() / (1024 ** 3)
+    print(f"[{tag}] VRAM Allocated: {allocated:.2f} GB | Reserved: {reserved:.2f} GB")
+
+def main():
+    model_id = "Qwen/Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4"
+    print(f"Loading {model_id} into CPU RAM...")
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    
+    # Load the model onto CPU (parking lot)
+    # Note: If it's a GPTQ or bitsandbytes 4-bit model, loading strictly to CPU 
+    # requires device_map="cpu". We also pass load_in_4bit as requested by constraints.
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            device_map="cpu",
+            load_in_4bit=True,
+            torch_dtype=torch.float16,
+        )
+    except Exception as e:
+        print(f"Fallback loading without load_in_4bit due to environment compatibility: {e}")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            device_map="cpu",
+            torch_dtype=torch.float16,
+        )
+
+    print_memory_profile("Post-Load CPU")
+
+    print("\nAttaching Dynamic Asynchronous Expert Offloader...")
+    # Monkey-Patch the model
+    model = attach_lru_offloader(model, max_experts_in_vram=2)
+
+    print("\nMoving core components (Embeddings, LM Head, Routers) to GPU...")
+    # We must move the non-expert parts to the GPU for execution.
+    # The OffloadedMoeBlock will handle keeping experts on CPU and fetching them dynamically.
+    for name, param in model.named_parameters():
+        if "experts" not in name:
+            param.data = param.data.to('cuda')
+    for name, buffer in model.named_buffers():
+        if "experts" not in name:
+            buffer.data = buffer.data.to('cuda')
+
+    print_memory_profile("Post-Core-Transfer")
+
+    # Benchmarking / Testing task
+    prompt = "Explain the theory of relativity"
+    inputs = tokenizer(prompt, return_tensors="pt").to('cuda')
+
+    print(f"\nGenerating response for prompt: '{prompt}'")
+    start_time = time.time()
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=50,
+            pad_token_id=tokenizer.eos_token_id
+        )
+
+    end_time = time.time()
+    generation_time = end_time - start_time
+    
+    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    num_tokens = outputs.shape[1] - inputs.input_ids.shape[1]
+    tokens_per_sec = num_tokens / generation_time
+
+    print("\n--- Output ---")
+    print(generated_text)
+    print("--------------\n")
+
+    print("--- Telemetry ---")
+    print(f"Tokens generated: {num_tokens}")
+    print(f"Generation time: {generation_time:.2f} seconds")
+    print(f"Throughput: {tokens_per_sec:.2f} tokens/sec")
+    print_memory_profile("End of Generation")
+    
+    # Assert VRAM stays under 3.5 GB constraint
+    allocated_gb = torch.cuda.memory_allocated() / (1024 ** 3)
+    if allocated_gb < 3.5:
+        print("\nSUCCESS: VRAM footprint successfully constrained below 3.5 GB limit.")
+    else:
+        print("\nWARNING: VRAM footprint exceeded the 3.5 GB limit.")
+
+if __name__ == "__main__":
+    main()
