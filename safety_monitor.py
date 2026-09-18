@@ -68,12 +68,14 @@ class SafetyWatchdog:
                 # 4. Terminate if dangerous
                 if crash_reason:
                     print("\n" + "="*60)
-                    print("🚨 SAFETY WATCHDOG TRIGGERED: ABORTING PROCESS 🚨")
+                    print("!!! SAFETY WATCHDOG TRIGGERED: ABORTING PROCESS !!!")
                     print("="*60)
                     print(crash_reason)
                     print("="*60)
                     print("Action: Terminating process immediately to prevent hardware freeze/crash...")
                     print("="*60 + "\n")
+                    import sys
+                    sys.stdout.flush()
                     # Force hard OS exit to instantly halt all PyTorch CUDA operations
                     os._exit(1)
                     

@@ -12,22 +12,17 @@ class OffloadedMoeBlock(nn.Module):
         # Preserve original components
         self.gate = original_block.gate
         self.experts = original_block.experts
+        
+        # Capture shared experts which are critical for Qwen MoE
+        self.shared_expert = getattr(original_block, 'shared_expert', None)
+        self.shared_expert_gate = getattr(original_block, 'shared_expert_gate', None)
+        
         self.cache_manager = cache_manager
         
         # Preserve relevant attributes
         self.hidden_dim = getattr(original_block, 'hidden_dim', None)
         self.top_k = getattr(original_block, 'top_k', 2)
-        
-        # 1. Page-Locked Memory (Pinned Memory)
-        # Pin the CPU-bound expert tensors upon initialization so that 
-        # non-blocking PCIe transfers work efficiently during the forward pass.
-        for expert in self.experts:
-            for param in expert.parameters():
-                if param.device.type == 'cpu':
-                    param.data = param.data.pin_memory()
-            for buffer in expert.buffers():
-                if buffer.device.type == 'cpu':
-                    buffer.data = buffer.data.pin_memory()
+        self.norm_topk_prob = getattr(original_block, 'norm_topk_prob', False)
 
     def forward(self, hidden_states: torch.Tensor):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
@@ -39,8 +34,10 @@ class OffloadedMoeBlock(nn.Module):
         
         routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
         
-        # Normalize weights
-        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        # Normalize weights only if the model configuration expects it
+        if self.norm_topk_prob:
+            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+            
         routing_weights = routing_weights.to(hidden_states.dtype)
         
         # Get unique experts required for this batch
@@ -49,15 +46,15 @@ class OffloadedMoeBlock(nn.Module):
         # 2. Immediately loop through selected_experts and call cache_manager.prefetch()
         # This starts all PCIe bus transfers concurrently on separate streams.
         for expert_idx in unique_experts:
-            self.cache_manager.prefetch(expert_idx, self.experts[expert_idx])
+            self.cache_manager.prefetch(self.experts[expert_idx])
             
         # 3. Loop through them again, pointer-swap, compute, and accumulate
         final_hidden_states = torch.zeros_like(hidden_states_flat)
         
         for expert_idx in unique_experts:
-            # Retrieves pre-allocated GPU tensors and queues a wait_stream on the GPU
-            gpu_tensors = self.cache_manager.get_expert_slot(expert_idx)
             expert = self.experts[expert_idx]
+            # Retrieves pre-allocated GPU tensors and queues a wait_stream on the GPU
+            gpu_tensors = self.cache_manager.get_expert_slot(expert)
             
             # Find tokens routed to this expert
             expert_mask = (selected_experts == expert_idx)
@@ -94,8 +91,16 @@ class OffloadedMoeBlock(nn.Module):
             # Accumulate the scaled results
             final_hidden_states[token_idx] += expert_out * weights_for_expert
             
+        # Standard huggingface MoE returns (hidden_states, router_logits)
+        
+        # 4. Add Shared Expert Output (CRITICAL FOR QWEN MOE)
+        if self.shared_expert is not None:
+            shared_expert_output = self.shared_expert(hidden_states_flat)
+            if self.shared_expert_gate is not None:
+                shared_expert_output = shared_expert_output * torch.sigmoid(self.shared_expert_gate(hidden_states_flat))
+            final_hidden_states += shared_expert_output
+            
         # Reshape back to original dimensions
         final_hidden_states = final_hidden_states.view(batch_size, sequence_length, hidden_dim)
         
-        # Standard huggingface MoE returns (hidden_states, router_logits)
         return final_hidden_states, router_logits

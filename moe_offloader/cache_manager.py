@@ -29,15 +29,17 @@ class LRUVRAMCache:
             
         self.is_initialized = True
 
-    def prefetch(self, expert_idx: int, expert_module: torch.nn.Module):
+    def prefetch(self, expert_module: torch.nn.Module):
         """
         Initiates an async non-blocking transfer to a pre-allocated GPU slot.
         """
         if not self.is_initialized:
             self._initialize_slots(expert_module)
             
-        if expert_idx in self.cache:
-            self.cache.move_to_end(expert_idx)
+        expert_key = id(expert_module)
+            
+        if expert_key in self.cache:
+            self.cache.move_to_end(expert_key)
             return
 
         # Make room: recycle the LRU slot
@@ -57,17 +59,18 @@ class LRUVRAMCache:
             for name, buffer in expert_module.named_buffers():
                 gpu_tensors[name].copy_(buffer.data, non_blocking=True)
                 
-        self.cache[expert_idx] = (slot_idx, stream)
+        self.cache[expert_key] = (slot_idx, stream)
 
-    def get_expert_slot(self, expert_idx: int) -> dict:
+    def get_expert_slot(self, expert_module: torch.nn.Module) -> dict:
         """
         Retrieves the dict of GPU tensors for the expert.
         Tells the main compute stream to wait for the transfer stream.
         """
-        if expert_idx not in self.cache:
-            raise RuntimeError(f"Expert {expert_idx} was not prefetched!")
+        expert_key = id(expert_module)
+        if expert_key not in self.cache:
+            raise RuntimeError(f"Expert {expert_key} was not prefetched!")
             
-        slot_idx, transfer_stream = self.cache[expert_idx]
+        slot_idx, transfer_stream = self.cache[expert_key]
         
         # [EFFICIENCY UPGRADE]
         # Make the current CUDA compute stream wait for the transfer stream.

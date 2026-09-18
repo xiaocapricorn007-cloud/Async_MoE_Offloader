@@ -11,10 +11,8 @@ def print_memory_profile(tag: str):
     print(f"[{tag}] VRAM Allocated: {allocated:.2f} GB | Reserved: {reserved:.2f} GB")
 
 def main():
-    # Start the safety watchdog to prevent OOM crashes
-    # Adjusted to 98.0% to give you maximum headroom since your idle RAM sits at 60%
-    watchdog = SafetyWatchdog(vram_limit_gb=3.8, ram_percent_limit=98.0, check_interval=0.1)
-    watchdog.start()
+    # Safety Watchdog set to exactly 99.5% System RAM and 3.9GB VRAM
+    watchdog = SafetyWatchdog(vram_limit_gb=3.9, ram_percent_limit=99.5, check_interval=0.1)
     
     model_id = "Qwen/Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4"
     print(f"Loading {model_id} into CPU RAM...")
@@ -43,25 +41,35 @@ def main():
 
     print("\nAttaching Dynamic Asynchronous Expert Offloader...")
     # Monkey-Patch the model
-    model = attach_lru_offloader(model, max_experts_in_vram=2)
+    # Adjusted max_experts_in_vram to 330
+    model = attach_lru_offloader(model, max_experts_in_vram=330)
 
     print("\nMoving core components (Embeddings, LM Head, Routers) to GPU...")
     # We must move the non-expert parts to the GPU for execution.
     # The OffloadedMoeBlock will handle keeping experts on CPU and fetching them dynamically.
     for name, param in model.named_parameters():
-        if "experts" not in name:
+        if "mlp.experts" not in name:
             param.data = param.data.to('cuda')
     for name, buffer in model.named_buffers():
-        if "experts" not in name:
+        if "mlp.experts" not in name:
             buffer.data = buffer.data.to('cuda')
+            
+    # Start the watchdog ONLY after the model is safely loaded into memory
+    watchdog.start()
 
     print_memory_profile("Post-Core-Transfer")
 
     # Benchmarking / Testing task
-    prompt = "Explain the theory of relativity"
-    inputs = tokenizer(prompt, return_tensors="pt").to('cuda')
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant. Always reply in English."},
+        {"role": "user", "content": "Explain the theory of relativity in simple terms."}
+    ]
+    
+    # Apply the proper chat formatting so the model knows it's a conversation
+    text_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = tokenizer(text_prompt, return_tensors="pt").to('cuda')
 
-    print(f"\nGenerating response for prompt: '{prompt}'")
+    print(f"\nGenerating response for prompt...")
     start_time = time.time()
 
     with torch.no_grad():
@@ -79,7 +87,8 @@ def main():
     tokens_per_sec = num_tokens / generation_time
 
     print("\n--- Output ---")
-    print(generated_text)
+    # Safely print on Windows terminals (cp1252) to avoid UnicodeEncodeError crashes
+    print(generated_text.encode('ascii', 'replace').decode('ascii'))
     print("--------------\n")
 
     print("--- Telemetry ---")
