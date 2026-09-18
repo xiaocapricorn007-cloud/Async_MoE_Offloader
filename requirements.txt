@@ -1,5 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
 torch>=2.0.0
+torchvision
+torchaudio
 transformers>=4.38.0
 accelerate
 bitsandbytes
 psutil
+auto-gptq
