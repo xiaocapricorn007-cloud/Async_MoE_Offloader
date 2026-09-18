@@ -1,6 +1,6 @@
 import torch
 import time
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from moe_offloader.patcher import attach_lru_offloader
 from safety_monitor import SafetyWatchdog
 
@@ -16,26 +16,19 @@ def main():
     watchdog = SafetyWatchdog(vram_limit_gb=3.8, ram_percent_limit=98.0, check_interval=0.1)
     watchdog.start()
     
-    model_id = "Qwen/Qwen1.5-MoE-A2.7B-Chat"
+    model_id = "Qwen/Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4"
     print(f"Loading {model_id} into CPU RAM...")
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    
-    # Configure 4-bit quantization properly using BitsAndBytesConfig
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.float16,
-    )
     
     try:
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
             device_map="cpu",
-            quantization_config=bnb_config,
             torch_dtype=torch.float16,
         )
     except Exception as e:
-        print(f"Fallback loading failed: {e}")
+        print(f"Loading failed: {e}")
         return
 
     print_memory_profile("Post-Load CPU")
