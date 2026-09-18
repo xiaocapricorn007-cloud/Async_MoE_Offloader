@@ -2,9 +2,10 @@
 torch>=2.0.0
 torchvision
 torchaudio
-transformers==4.38.2
+transformers==4.44.2
 accelerate
 bitsandbytes
 psutil
 auto-gptq
-optimum==1.17.1
+optimum==1.22.0
+peft==0.12.0
