@@ -20,14 +20,6 @@ def main():
     print(f"Loading {model_id} into CPU RAM...")
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    
-    # Fix for newer auto-gptq versions where QuantizeConfig was renamed to BaseQuantizeConfig
-    try:
-        import auto_gptq
-        if not hasattr(auto_gptq, 'QuantizeConfig') and hasattr(auto_gptq, 'BaseQuantizeConfig'):
-            auto_gptq.QuantizeConfig = auto_gptq.BaseQuantizeConfig
-    except ImportError:
-        pass
         
     try:
         model = AutoModelForCausalLM.from_pretrained(
@@ -36,6 +28,8 @@ def main():
             torch_dtype=torch.float16,
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Loading failed: {e}")
         return
 

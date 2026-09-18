@@ -28,13 +28,13 @@ class SafetyWatchdog:
         self.is_running = True
         self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self.thread.start()
-        print(f"[SafetyWatchdog] 🛡️ Active. Limits -> VRAM: {self.vram_limit_gb}GB | System RAM: {self.ram_percent_limit}%")
+        print(f"[SafetyWatchdog] Active. Limits -> VRAM: {self.vram_limit_gb}GB | System RAM: {self.ram_percent_limit}%")
 
     def stop(self):
         self.is_running = False
         if self.thread:
             self.thread.join()
-        print(f"[SafetyWatchdog] 🛡️ Deactivated.")
+        print(f"[SafetyWatchdog] Deactivated.")
 
     def _monitor_loop(self):
         while self.is_running:
