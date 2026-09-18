@@ -1,6 +1,6 @@
 import torch
 import time
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, GPTQConfig
 from moe_offloader.patcher import attach_lru_offloader
 from safety_monitor import SafetyWatchdog
 
@@ -21,10 +21,16 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
         
+    # GPTQ models by default use the Exllama backend which strictly requires all weights
+    # to be loaded directly to the GPU. Since our architecture relies on loading to the CPU
+    # parking lot first, we must disable Exllama during initialization.
+    gptq_config = GPTQConfig(bits=4, disable_exllama=True)
+        
     try:
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
             device_map="cpu",
+            quantization_config=gptq_config,
             torch_dtype=torch.float16,
         )
     except Exception as e:
