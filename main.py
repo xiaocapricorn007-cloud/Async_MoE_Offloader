@@ -1,6 +1,6 @@
 import torch
 import time
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from moe_offloader.patcher import attach_lru_offloader
 from safety_monitor import SafetyWatchdog
 
@@ -12,7 +12,8 @@ def print_memory_profile(tag: str):
 
 def main():
     # Start the safety watchdog to prevent OOM crashes
-    watchdog = SafetyWatchdog(vram_limit_gb=3.8, ram_percent_limit=90.0, check_interval=0.1)
+    # Adjusted to 98.0% to give you maximum headroom since your idle RAM sits at 60%
+    watchdog = SafetyWatchdog(vram_limit_gb=3.8, ram_percent_limit=98.0, check_interval=0.1)
     watchdog.start()
     
     model_id = "Qwen/Qwen1.5-MoE-A2.7B-Chat"
@@ -20,23 +21,22 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     
-    # Load the model onto CPU (parking lot)
-    # Note: If it's a GPTQ or bitsandbytes 4-bit model, loading strictly to CPU 
-    # requires device_map="cpu". We also pass load_in_4bit as requested by constraints.
+    # Configure 4-bit quantization properly using BitsAndBytesConfig
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+    )
+    
     try:
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
             device_map="cpu",
-            load_in_4bit=True,
+            quantization_config=bnb_config,
             torch_dtype=torch.float16,
         )
     except Exception as e:
-        print(f"Fallback loading without load_in_4bit due to environment compatibility: {e}")
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            device_map="cpu",
-            torch_dtype=torch.float16,
-        )
+        print(f"Fallback loading failed: {e}")
+        return
 
     print_memory_profile("Post-Load CPU")
 
